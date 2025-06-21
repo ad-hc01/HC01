@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# 本檔案為主控程式，整合 GPT 導師 + 搜尋補充 + 圖片分析 + 多人記憶管理 + 地圖/語音/卡片模組 + 安靜喚醒模式
+# 本檔案為主控程式，整合 GPT 導師 + 圖片 + 多模組 + 使用者命名記憶 + 自動識別名稱 + 安靜喚醒模式
 
 import os
 from flask import Flask, request, abort
@@ -31,10 +31,11 @@ app = Flask(__name__)
 line_bot_api = LineBotApi(os.getenv("LINE_CHANNEL_ACCESS_TOKEN"))
 handler = WebhookHandler(os.getenv("LINE_CHANNEL_SECRET"))
 
-# ✅ 使用者資料快取，預設 ai_name 為 HC，並限制記憶最多 20 句
+# 使用者資料快取，預設 ai_name 為 HC，記憶限制 20 句
 user_data = defaultdict(lambda: {
     "name": None,
-    "ai_name": "HC",        # ✅ 預設名稱
+    "display_name": None,
+    "ai_name": "HC",
     "style": "正式風",
     "history": deque(maxlen=20),
     "facts": []
@@ -55,6 +56,13 @@ def handle_text(event):
     user_id = event.source.user_id
     text = event.message.text.strip()
     memory = user_data[user_id]
+
+    # 嘗試抓 LINE 使用者名稱（每次更新）
+    try:
+        profile = line_bot_api.get_profile(user_id)
+        memory["display_name"] = profile.display_name
+    except:
+        pass
 
     # --- 記憶控制區 ---
     if is_clear_facts(text):
@@ -79,19 +87,18 @@ def handle_text(event):
         return
 
     ai_name = memory["ai_name"] or "HC"
+    user_name = memory["display_name"] or memory["name"] or "朋友"
 
-    # ✅ 查詢 AI 名字
     if text in ["你叫什麼名字", "你是誰", "你的名字是？", "你現在叫什麼"]:
         line_bot_api.reply_message(event.reply_token, TextSendMessage(
-            text=f"我叫做 {ai_name} 😄" if ai_name else "你還沒幫我取名字呢～"
-        ))
+            text=f"我叫做 {ai_name} 😄"))
         return
 
-    # 🔇 安靜模式：若輸入未提到 AI 名稱則不處理
+    # 安靜模式，未提及 AI 名稱不回應
     if ai_name.lower() not in text.lower():
         return
 
-    # 🗣️ 第一次提到 AI（歡迎提示）
+    # 第一次提到 AI 時，提示歡迎語
     if memory["history"] == deque(maxlen=20):
         welcome = (
             f"嗨～你可以幫我改名喔，我就是你專屬的小助理了 ❤️\n"
@@ -140,7 +147,7 @@ def handle_text(event):
     memory["history"].append({"role": "user", "content": text})
     memory["history"].append({"role": "assistant", "content": reply})
 
-    line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
+    line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"{user_name}～{reply}"))
 
 @handler.add(MessageEvent, message=ImageMessage)
 def handle_image(event):
