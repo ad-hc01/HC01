@@ -1,17 +1,18 @@
+
 # -*- coding: utf-8 -*-
-# 本檔案為主控程式，整合 GPT 導師 + 圖片 + 多模組 + 使用者命名記憶 + 自動識別名稱 + 安靜喚醒模式
+# 本檔案為主控程式，整合 GPT 導師 + 圖片 + 多模組 + 使用者命名記憶 + 自動識別名稱 + 安靜喚醒模式 + 翻譯功能
 
 import os
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
-from linebot.models import MessageEvent, TextMessage, ImageMessage, AudioMessage, TextSendMessage
+from linebot.models import MessageEvent, TextMessage, ImageMessage, AudioMessage, FileMessage, TextSendMessage
 
 from utils import (
     extract_user_name, extract_ai_name, extract_user_style,
     extract_user_fact, is_clear_facts,
     is_image_request, is_video_request, is_transport_request,
-    is_map_request
+    is_map_request, is_translate_request
 )
 from gpt_handler import generate_gpt_reply
 from image_generator import generate_image_message
@@ -19,6 +20,7 @@ from image_analyzer import analyze_image_with_gpt
 from youtube_handler import search_youtube_card
 from transport import get_thsr_schedule
 from search_web import search_web_fallback
+from translate_handler import translate_text
 
 from extended_modules.map_handler import generate_map_image
 from extended_modules.tts_handler import generate_tts_audio
@@ -38,7 +40,8 @@ user_data = defaultdict(lambda: {
     "ai_name": "HC",
     "style": "正式風",
     "history": deque(maxlen=20),
-    "facts": []
+    "facts": [],
+    "translate_pending": None
 })
 
 @app.route("/callback", methods=['POST'])
@@ -57,14 +60,12 @@ def handle_text(event):
     text = event.message.text.strip()
     memory = user_data[user_id]
 
-    # 嘗試抓 LINE 使用者名稱（每次更新）
     try:
         profile = line_bot_api.get_profile(user_id)
         memory["display_name"] = profile.display_name
     except:
         pass
 
-    # --- 記憶控制區 ---
     if is_clear_facts(text):
         memory["facts"] = []
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text="🧹 已清除你的個人知識。"))
@@ -86,6 +87,27 @@ def handle_text(event):
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"已切換為「{new_style}」風格。"))
         return
 
+    # --- 翻譯處理區 ---
+    if memory["translate_pending"]:
+        original = memory["translate_pending"]
+        target_lang = text.strip()
+        translated = translate_text(original, target_lang)
+        memory["translate_pending"] = None
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text=f"翻譯成「{target_lang}」結果如下：\n{original} → {translated}")
+        )
+        return
+
+    if is_translate_request(text):
+        original_text = text.replace("翻譯", "").strip()
+        memory["translate_pending"] = original_text
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text="你想翻譯成哪一種語言呢？例如英文、日文、韓文、法文...")
+        )
+        return
+
     ai_name = memory["ai_name"] or "HC"
     user_name = memory["display_name"] or memory["name"] or "朋友"
 
@@ -94,11 +116,9 @@ def handle_text(event):
             text=f"我叫做 {ai_name} 😄"))
         return
 
-    # 安靜模式，未提及 AI 名稱不回應
     if ai_name.lower() not in text.lower():
         return
 
-    # 第一次提到 AI 時，提示歡迎語
     if memory["history"] == deque(maxlen=20):
         welcome = (
             f"嗨～你可以幫我改名喔，我就是你專屬的小助理了 ❤️\n"
@@ -108,7 +128,6 @@ def handle_text(event):
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=welcome))
         return
 
-    # --- 功能判斷區 ---
     if is_image_request(text):
         reply = generate_image_message(text)
         line_bot_api.reply_message(event.reply_token, reply)
@@ -129,7 +148,6 @@ def handle_text(event):
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text="❌ 找不到地圖，請確認地點或 API 金鑰設定"))
         return
 
-    # --- GPT 對話區 ---
     reply = generate_gpt_reply(
         user_id=user_id,
         user_msg=text,
