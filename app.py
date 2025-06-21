@@ -91,11 +91,79 @@ def handle_text(event):
     if ai_name.lower() not in text.lower():
         return
 
-    # 🗣️ 第一次提到 AI（或非命令式開場），給出提示與情感語句
+    # 🗣️ 第一次提到 AI（歡迎提示）
     if memory["history"] == deque(maxlen=20):
         welcome = (
             f"嗨～你可以幫我改名喔，我就是你專屬的小助理了 ❤️\n"
             f"我會記住你說過的 20 句話～但我記憶力有限喔！\n"
             f"{ai_name} 不能陪妳太久真難過~~"
         )
-        line_bot_api.reply_message(event.reply_token, TextSendMessag
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=welcome))
+        return
+
+    # --- 功能判斷區 ---
+    if is_image_request(text):
+        reply = generate_image_message(text)
+        line_bot_api.reply_message(event.reply_token, reply)
+        return
+    if is_video_request(text):
+        reply = search_youtube_card(text)
+        line_bot_api.reply_message(event.reply_token, reply)
+        return
+    if is_transport_request(text):
+        reply = get_thsr_schedule()
+        line_bot_api.reply_message(event.reply_token, reply)
+        return
+    if is_map_request(text):
+        reply = generate_map_image(text)
+        if reply:
+            line_bot_api.reply_message(event.reply_token, reply)
+        else:
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="❌ 找不到地圖，請確認地點或 API 金鑰設定"))
+        return
+
+    # --- GPT 對話區 ---
+    reply = generate_gpt_reply(
+        user_id=user_id,
+        user_msg=text,
+        history=memory["history"],
+        user_name=memory["name"],
+        ai_name=memory["ai_name"],
+        style=memory["style"],
+        facts=memory["facts"]
+    )
+
+    if "我不知道" in reply or "無法提供" in reply:
+        fallback = search_web_fallback(text)
+        reply += f"\n\n{fallback}"
+
+    memory["history"].append({"role": "user", "content": text})
+    memory["history"].append({"role": "assistant", "content": reply})
+
+    line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
+
+@handler.add(MessageEvent, message=ImageMessage)
+def handle_image(event):
+    user_id = event.source.user_id
+    memory = user_data[user_id]
+    if not memory["ai_name"]:
+        return
+    message_id = event.message.id
+    image_url = f"https://api-data.line.me/v2/bot/message/{message_id}/content"
+    reply = analyze_image_with_gpt(image_url, memory["name"], memory["ai_name"], memory["style"])
+    line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
+
+@handler.add(MessageEvent, message=AudioMessage)
+def handle_audio(event):
+    user_id = event.source.user_id
+    memory = user_data[user_id]
+    if not memory["ai_name"]:
+        return
+    message_id = event.message.id
+    text = transcribe_audio_from_line(message_id, line_bot_api)
+    if text:
+        event.message.text = text
+        handle_text(event)
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
