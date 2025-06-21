@@ -2,6 +2,10 @@
 # 本檔案為指令解析模組，處理命名、風格切換、知識記憶等行為
 
 import re
+
+def is_stylegen_request(text: str) -> bool:
+    return "幫我生成" in text and "風格" in text
+
 def is_translate_request(text):
     return text.startswith("翻譯 ")
 
