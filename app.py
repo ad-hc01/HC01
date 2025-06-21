@@ -27,10 +27,12 @@ from extended_modules.flex_template import create_video_card
 
 from collections import defaultdict, deque
 
+# ✅ 初始化
 app = Flask(__name__)
 line_bot_api = LineBotApi(os.getenv("LINE_CHANNEL_ACCESS_TOKEN"))
 handler = WebhookHandler(os.getenv("LINE_CHANNEL_SECRET"))
 
+# ✅ 使用者狀態快取（命名、風格、記憶等）
 user_data = defaultdict(lambda: {
     "name": None,
     "ai_name": None,
@@ -39,6 +41,7 @@ user_data = defaultdict(lambda: {
     "facts": []
 })
 
+# ✅ LINE webhook 路由
 @app.route("/callback", methods=['POST'])
 def callback():
     signature = request.headers['X-Line-Signature']
@@ -49,13 +52,14 @@ def callback():
         abort(400)
     return 'OK'
 
+# ✅ 處理文字訊息
 @handler.add(MessageEvent, message=TextMessage)
 def handle_text(event):
     user_id = event.source.user_id
     text = event.message.text.strip()
     memory = user_data[user_id]
 
-    # 使用者記憶設定
+    # --- 記憶控制區 ---
     if is_clear_facts(text):
         memory["facts"] = []
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text="🧹 已清除你的個人知識。"))
@@ -76,10 +80,12 @@ def handle_text(event):
         memory["style"] = new_style
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"已切換為「{new_style}」風格。"))
         return
-    if not memory["ai_name"]:
-        return  # 未命名 AI 不啟動
 
-    # 功能判斷與分派
+    # 沒設定 AI 名稱就不處理
+    if not memory["ai_name"]:
+        return
+
+    # --- 功能判斷區 ---
     if is_image_request(text):
         reply = generate_image_message(text)
         line_bot_api.reply_message(event.reply_token, reply)
@@ -100,7 +106,7 @@ def handle_text(event):
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text="❌ 找不到地圖，請確認地點或 API 金鑰設定"))
         return
 
-    # GPT 對話與 fallback
+    # --- GPT 對話區 ---
     reply = generate_gpt_reply(
         user_id=user_id,
         user_msg=text,
@@ -110,6 +116,8 @@ def handle_text(event):
         style=memory["style"],
         facts=memory["facts"]
     )
+
+    # fallback 補充
     if "我不知道" in reply or "無法提供" in reply:
         fallback = search_web_fallback(text)
         reply += f"\n\n{fallback}"
@@ -119,6 +127,7 @@ def handle_text(event):
 
     line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
 
+# ✅ 處理圖片訊息（圖像分析）
 @handler.add(MessageEvent, message=ImageMessage)
 def handle_image(event):
     user_id = event.source.user_id
@@ -130,6 +139,7 @@ def handle_image(event):
     reply = analyze_image_with_gpt(image_url, memory["name"], memory["ai_name"], memory["style"])
     line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
 
+# ✅ 處理語音訊息（語音轉文字 → 當作文字處理）
 @handler.add(MessageEvent, message=AudioMessage)
 def handle_audio(event):
     user_id = event.source.user_id
@@ -142,5 +152,6 @@ def handle_audio(event):
         event.message.text = text
         handle_text(event)
 
+# ✅ 伺服器啟動點（支援 Render）
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
