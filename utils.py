@@ -2,6 +2,8 @@
 # 本檔案為指令解析模組，處理命名、風格切換、知識記憶等行為
 
 import re
+def is_translate_request(text):
+    return text.startswith("翻譯 ")
 
 def extract_user_name(text):
     """提取使用者自訂名稱"""
