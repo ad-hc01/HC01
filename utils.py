@@ -41,3 +41,9 @@ def is_map_request(text):
     """判斷是否為地圖查詢請求"""
     keywords = ["地圖", "在哪", "怎麼走", "地址", "地點", "map", "location"]
     return any(keyword in text.lower() for keyword in keywords)
+
+def is_draw_request(text):
+    return any(keyword in text for keyword in ["抽卡", "抽塔羅", "塔羅牌", "抽運勢", "今日運勢"])
+
+def is_weather_request(text):
+    return "天氣" in text

@@ -1,18 +1,18 @@
-
 # -*- coding: utf-8 -*-
-# 本檔案為主控程式，整合 GPT 導師 + 圖片 + 多模組 + 使用者命名記憶 + 自動識別名稱 + 安靜喚醒模式 + 翻譯功能
+# 本檔案為主控程式，整合 GPT 導師 + 多模組 + 使用者命名記憶 + 翻譯 + YouTube 下載連結功能 + 地圖/抽卡/天氣
 
 import os
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
-from linebot.models import MessageEvent, TextMessage, ImageMessage, AudioMessage, FileMessage, TextSendMessage
+from linebot.models import MessageEvent, TextMessage, ImageMessage, AudioMessage, TextSendMessage
 
 from utils import (
     extract_user_name, extract_ai_name, extract_user_style,
     extract_user_fact, is_clear_facts,
     is_image_request, is_video_request, is_transport_request,
-    is_map_request, is_translate_request
+    is_map_request, is_translate_request,
+    is_draw_request, is_weather_request
 )
 from gpt_handler import generate_gpt_reply
 from image_generator import generate_image_message
@@ -21,11 +21,13 @@ from youtube_handler import search_youtube_card
 from transport import get_thsr_schedule
 from search_web import search_web_fallback
 from translate_handler import translate_text
+from draw_handler import draw_fortune, draw_tarot, draw_custom
+from youtube_downloader import handle_youtube_download
+from weather_handler import get_weather_by_location
 
 from extended_modules.map_handler import generate_map_image
 from extended_modules.tts_handler import generate_tts_audio
 from extended_modules.stt_handler import transcribe_audio_from_line
-from extended_modules.flex_template import create_video_card
 
 from collections import defaultdict, deque
 
@@ -33,7 +35,6 @@ app = Flask(__name__)
 line_bot_api = LineBotApi(os.getenv("LINE_CHANNEL_ACCESS_TOKEN"))
 handler = WebhookHandler(os.getenv("LINE_CHANNEL_SECRET"))
 
-# 使用者資料快取，預設 ai_name 為 HC，記憶限制 20 句
 user_data = defaultdict(lambda: {
     "name": None,
     "display_name": None,
@@ -66,6 +67,7 @@ def handle_text(event):
     except:
         pass
 
+    # -- 控制語句區 --
     if is_clear_facts(text):
         memory["facts"] = []
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text="🧹 已清除你的個人知識。"))
@@ -87,7 +89,7 @@ def handle_text(event):
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"已切換為「{new_style}」風格。"))
         return
 
-    # --- 翻譯處理區 ---
+    # -- 翻譯區 --
     if memory["translate_pending"]:
         original = memory["translate_pending"]
         target_lang = text.strip()
@@ -108,12 +110,20 @@ def handle_text(event):
         )
         return
 
+    # -- YouTube 下載指令 --
+    if text.startswith("下載影片"):
+        handle_youtube_download(event, line_bot_api, media_type="video")
+        return
+    if text.startswith("下載音訊") or text.startswith("下載音樂"):
+        handle_youtube_download(event, line_bot_api, media_type="audio")
+        return
+
+    # -- 安靜喚醒控制 --
     ai_name = memory["ai_name"] or "HC"
     user_name = memory["display_name"] or memory["name"] or "朋友"
 
     if text in ["你叫什麼名字", "你是誰", "你的名字是？", "你現在叫什麼"]:
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(
-            text=f"我叫做 {ai_name} 😄"))
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"我叫做 {ai_name} 😄"))
         return
 
     if ai_name.lower() not in text.lower():
@@ -128,18 +138,35 @@ def handle_text(event):
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=welcome))
         return
 
+    # -- 模組處理 --
     if is_image_request(text):
         reply = generate_image_message(text)
         line_bot_api.reply_message(event.reply_token, reply)
         return
+
     if is_video_request(text):
         reply = search_youtube_card(text)
         line_bot_api.reply_message(event.reply_token, reply)
         return
+
     if is_transport_request(text):
         reply = get_thsr_schedule()
         line_bot_api.reply_message(event.reply_token, reply)
         return
+
+    if is_draw_request(text):
+        if "運勢" in text:
+            reply = draw_fortune()
+        elif "塔羅" in text or "tarot" in text.lower():
+            reply = draw_tarot()
+        elif "自訂" in text and "抽" in text:
+            pool = text.split("抽")[-1].strip().split("、")
+            reply = draw_custom(pool)
+        else:
+            reply = "請指定要抽的類型，例如「抽運勢」、「抽塔羅」、「抽蘋果、香蕉、葡萄」"
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
+        return
+
     if is_map_request(text):
         reply = generate_map_image(text)
         if reply:
@@ -148,6 +175,12 @@ def handle_text(event):
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text="❌ 找不到地圖，請確認地點或 API 金鑰設定"))
         return
 
+    if is_weather_request(text):
+        reply = get_weather_by_location(text)
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
+        return
+
+    # -- GPT 對話 --
     reply = generate_gpt_reply(
         user_id=user_id,
         user_msg=text,
