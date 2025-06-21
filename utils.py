@@ -34,3 +34,8 @@ def is_video_request(text):
 
 def is_transport_request(text):
     return any(keyword in text for keyword in ["高鐵", "台鐵", "航班", "班次", "車次"])
+
+def is_map_request(text):
+    """判斷是否為地圖查詢請求"""
+    keywords = ["地圖", "在哪", "怎麼走", "地址", "地點", "map", "location"]
+    return any(keyword in text.lower() for keyword in keywords)
